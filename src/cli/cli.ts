@@ -3,11 +3,11 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import got from 'got';
-import { createWriteStream, createReadStream } from 'fs';
-import { readFile } from 'fs/promises';
-import { resolve } from 'path';
-import { Transform } from 'stream';
-import { pipeline } from 'stream/promises';
+import { createWriteStream, createReadStream } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 type MockServerData = {
   titles: string[];
@@ -31,10 +31,10 @@ type MockServerData = {
   };
 };
 
-const generateRandomNumber = (min: number, max: number): number => 
+const generateRandomNumber = (min: number, max: number): number =>
   Math.floor(Math.random() * (max - min + 1) + min);
 
-const getRandomItem = <T>(items: T[]): T => 
+const getRandomItem = <T>(items: T[]): T =>
   items[Math.floor(Math.random() * items.length)];
 
 const getRandomItems = <T>(items: T[], count: number): T[] => {
@@ -42,16 +42,20 @@ const getRandomItems = <T>(items: T[], count: number): T[] => {
   return shuffled.slice(0, count);
 };
 
-const generateRandomLocation = (center: { latitude: number; longitude: number; radius: number }) => {
+const generateRandomLocation = (center: {
+  latitude: number;
+  longitude: number;
+  radius: number;
+}) => {
   // Конвертируем радиус из километров в градусы (приблизительно)
   const radiusInDeg = center.radius / 111;
-  
+
   const randomAngle = Math.random() * 2 * Math.PI;
   const randomRadius = Math.sqrt(Math.random()) * radiusInDeg;
-  
+
   return {
-    latitude: center.latitude + (randomRadius * Math.cos(randomAngle)),
-    longitude: center.longitude + (randomRadius * Math.sin(randomAngle))
+    latitude: center.latitude + randomRadius * Math.cos(randomAngle),
+    longitude: center.longitude + randomRadius * Math.sin(randomAngle),
   };
 };
 
@@ -63,7 +67,7 @@ async function* generateOffers(mockData: MockServerData, count: number) {
     const photosCount = generateRandomNumber(3, 6);
     const photos = getRandomItems(mockData.previewImages, photosCount);
     const user = getRandomItem(mockData.users);
-    
+
     const offer = {
       title: getRandomItem(mockData.titles),
       description: getRandomItem(mockData.descriptions),
@@ -76,13 +80,16 @@ async function* generateOffers(mockData: MockServerData, count: number) {
       rooms: generateRandomNumber(1, 5),
       guests: generateRandomNumber(1, 10),
       price: generateRandomNumber(50, 1000),
-      features: getRandomItems(mockData.features, generateRandomNumber(2, 6)).join(';'),
+      features: getRandomItems(
+        mockData.features,
+        generateRandomNumber(2, 6)
+      ).join(';'),
       authorName: user.name,
       authorEmail: user.email,
       authorAvatar: user.avatarUrl,
       authorIsPro: user.type === 'pro',
       latitude: location.latitude.toFixed(6),
-      longitude: location.longitude.toFixed(6)
+      longitude: location.longitude.toFixed(6),
     };
 
     const row = [
@@ -103,10 +110,10 @@ async function* generateOffers(mockData: MockServerData, count: number) {
       offer.authorAvatar,
       offer.authorIsPro,
       offer.latitude,
-      offer.longitude
+      offer.longitude,
     ].join('\t');
 
-    yield row + '\n';
+    yield `${row}\n`;
   }
 }
 
@@ -118,19 +125,39 @@ class TSVTransform extends Transform {
     super();
     this.remainder = '';
     this.columns = [
-      'title', 'description', 'city', 'previewImage', 'photos',
-      'isPremium', 'rating', 'type', 'rooms', 'guests', 'price',
-      'features', 'authorName', 'authorEmail', 'authorAvatar',
-      'authorIsPro', 'latitude', 'longitude'
+      'title',
+      'description',
+      'city',
+      'previewImage',
+      'photos',
+      'isPremium',
+      'rating',
+      'type',
+      'rooms',
+      'guests',
+      'price',
+      'features',
+      'authorName',
+      'authorEmail',
+      'authorAvatar',
+      'authorIsPro',
+      'latitude',
+      'longitude',
     ];
   }
 
-  _transform(chunk: Buffer, _encoding: string, callback: Function) {
+  _transform(
+    chunk: Buffer,
+    _encoding: string,
+    callback: (error?: Error | null) => void
+  ) {
     const lines = (this.remainder + chunk.toString()).split('\n');
     this.remainder = lines.pop() || '';
 
     for (const line of lines) {
-      if (!line.trim()) continue;
+      if (!line.trim()) {
+        continue;
+      }
 
       const values = line.split('\t');
       if (values.length !== this.columns.length) {
@@ -150,7 +177,7 @@ class TSVTransform extends Transform {
     callback();
   }
 
-  _flush(callback: Function) {
+  _flush(callback: (error?: Error | null) => void) {
     if (this.remainder) {
       const values = this.remainder.split('\t');
       if (values.length === this.columns.length) {
@@ -164,77 +191,83 @@ class TSVTransform extends Transform {
   }
 }
 
-const handleGenerateCommand = async (count: number, filepath: string, url: string) => {
-    try {
-      console.log(chalk.blue('Fetching data from'), chalk.yellow(url));
-      
-      // Получаем все необходимые данные параллельно
-      const [
-        titles,
-        descriptions,
-        cities,
-        previewImages,
-        propertyTypes,
-        features,
-        users,
-        coordinates
-      ] = await Promise.all([
-        got(`${url}/titles`).json(),
-        got(`${url}/descriptions`).json(),
-        got(`${url}/cities`).json(),
-        got(`${url}/previewImages`).json(),
-        got(`${url}/propertyTypes`).json(),
-        got(`${url}/features`).json(),
-        got(`${url}/users`).json(),
-        got(`${url}/coordinates`).json()
-      ]);
-  
-      const mockData = {
-        titles,
-        descriptions,
-        cities,
-        previewImages,
-        propertyTypes,
-        features,
-        users,
-        coordinates
-      } as MockServerData;
-  
-      console.log(chalk.blue(`Generating ${count} offers...`));
-  
-      const writeStream = createWriteStream(filepath);
-      for await (const offerLine of generateOffers(mockData, count)) {
-        if (!writeStream.write(offerLine)) {
-          await new Promise(resolve => writeStream.once('drain', resolve));
-        }
+const handleGenerateCommand = async (
+  count: number,
+  filepath: string,
+  url: string
+) => {
+  try {
+    console.log(chalk.blue('Fetching data from'), chalk.yellow(url));
+
+    // Получаем все необходимые данные параллельно
+    const [
+      titles,
+      descriptions,
+      cities,
+      previewImages,
+      propertyTypes,
+      features,
+      users,
+      coordinates,
+    ] = await Promise.all([
+      got(`${url}/titles`).json(),
+      got(`${url}/descriptions`).json(),
+      got(`${url}/cities`).json(),
+      got(`${url}/previewImages`).json(),
+      got(`${url}/propertyTypes`).json(),
+      got(`${url}/features`).json(),
+      got(`${url}/users`).json(),
+      got(`${url}/coordinates`).json(),
+    ]);
+
+    const mockData = {
+      titles,
+      descriptions,
+      cities,
+      previewImages,
+      propertyTypes,
+      features,
+      users,
+      coordinates,
+    } as MockServerData;
+
+    console.log(chalk.blue(`Generating ${count} offers...`));
+
+    const writeStream = createWriteStream(filepath);
+    for await (const offerLine of generateOffers(mockData, count)) {
+      if (!writeStream.write(offerLine)) {
+        await new Promise((resolveWrite) =>
+          writeStream.once('drain', resolveWrite)
+        );
       }
-      writeStream.end();
-  
-      console.log(chalk.green('\n🎉 Data generation completed!'));
-      console.log(chalk.blue(`Generated ${count} offers to ${filepath}`));
-    } catch (error) {
-      console.error(chalk.red('\nFailed to generate data:'));
-      console.error(chalk.red(error instanceof Error ? error.message : String(error)));
-      process.exit(1);
     }
-  };
+    writeStream.end();
+
+    console.log(chalk.green('\n🎉 Data generation completed!'));
+    console.log(chalk.blue(`Generated ${count} offers to ${filepath}`));
+  } catch (error) {
+    console.error(chalk.red('\nFailed to generate data:'));
+    console.error(
+      chalk.red(error instanceof Error ? error.message : String(error))
+    );
+    throw error;
+  }
+};
 
 const handleImportCommand = async (filepath: string): Promise<void> => {
   try {
     console.log(chalk.blue('Starting import from'), chalk.yellow(filepath));
-    
+
     const transform = new TSVTransform();
-    await pipeline(
-      createReadStream(filepath),
-      transform,
-      process.stdout
-    );
+    await pipeline(createReadStream(filepath), transform, process.stdout);
 
     console.log(chalk.green('\n🎉 Data imported successfully!'));
   } catch (error) {
     console.error(chalk.red('\nFailed to import data:'));
-    console.error(chalk.red(error instanceof Error ? error.message : String(error)));
-    process.exit(1);
+    console.error(
+      chalk.red(error instanceof Error ? error.message : String(error))
+    );
+    throw error;
   }
 };
 
@@ -274,5 +307,5 @@ const bootstrap = async () => {
 bootstrap().catch((error) => {
   console.error(chalk.red('Fatal error:'));
   console.error(error);
-  process.exit(1);
+  throw error;
 });
